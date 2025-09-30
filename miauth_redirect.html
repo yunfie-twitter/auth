@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>miauth redirect</title></head>
+<body>
+<script>
+/*
+  このスクリプトはリダイレクトで付与されたトークンや code を親ウィンドウへ送信します。
+  実際は access_token が URL ハッシュ（#access_token=...）やクエリに入ることがあります。
+  以下は両方に対応する簡易パーサーです。
+*/
+
+function parseParams() {
+  const params = {};
+  // クエリ文字列 ?a=1&b=2
+  const q = new URLSearchParams(window.location.search);
+  for (const [k,v] of q.entries()) params[k] = v;
+  // ハッシュ #access_token=...&state=...
+  if (window.location.hash && window.location.hash.startsWith('#')) {
+    const h = new URLSearchParams(window.location.hash.slice(1));
+    for (const [k,v] of h.entries()) params[k] = v;
+  }
+  return params;
+}
+
+(function() {
+  const params = parseParams();
+  // message を送る相手 origin（セキュリティ）を明示したい場合は parentOrigin を指定する
+  // 例: const parentOrigin = 'https://yourdomain.example';
+  const message = {
+    type: 'miauth_result',
+    state: params.state || null,
+    access_token: params.access_token || params.token || null,
+    error: params.error || null,
+    // 他の受け取りたい値があれば追加
+  };
+  // 親ウィンドウへ送信
+  if (window.opener && !window.opener.closed) {
+    window.opener.postMessage(message, '*'); // 本番では '*' ではなく親の origin を指定する
+  } else if (window.opener) {
+    // もし opener がない、もしくは同一ウィンドウに戻す実装ならここに処理
+    console.warn('no opener');
+  }
+  // 自動で閉じる（必要ならタイムアウトを設ける）
+  setTimeout(() => { window.close(); }, 300);
+})();
+</script>
+<p>認証が完了しました。自動的にウィンドウを閉じます。</p>
+</body>
+</html>

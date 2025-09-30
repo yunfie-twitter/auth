@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Miauth モーダルサンプル</title>
+<style>
+/* シンプルなモーダルスタイル */
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; margin:0; padding:0; }
+button { cursor:pointer; }
+
+.modal-backdrop {
+  position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center;
+  z-index:1000; visibility:hidden; opacity:0; transition:opacity .18s;
+}
+.modal-backdrop.show { visibility:visible; opacity:1; }
+
+.modal {
+  background:#fff; border-radius:10px; width:min(480px, 92%); padding:20px; box-shadow:0 10px 30px rgba(0,0,0,0.2);
+}
+.modal h2 { margin:0 0 12px 0; font-size:18px; }
+.modal p { margin:0 0 16px 0; color:#444; }
+.actions { display:flex; gap:10px; justify-content:flex-end; margin-top:12px; }
+.btn { padding:8px 12px; border-radius:6px; border:1px solid #ddd; background:#f7f7f7; }
+.btn.primary { background:#0a84ff; color:white; border:1px solid rgba(0,0,0,0.05); }
+
+/* small status area */
+#status { margin-top:14px; font-size:13px; color:#666; }
+</style>
+</head>
+<body>
+
+<button id="openModalBtn">Miauthでログイン（モーダル）</button>
+
+<div id="miauthModal" class="modal-backdrop" role="dialog" aria-hidden="true">
+  <div class="modal" role="document">
+    <h2>Misskeyでログイン</h2>
+    <p>アカウントでログインしてアクセスを許可してください。完了するとこのモーダルに戻ります。</p>
+    <div class="actions">
+      <button id="cancelBtn" class="btn">キャンセル</button>
+      <button id="loginBtn" class="btn primary">Misskeyでログイン</button>
+    </div>
+    <div id="status">未ログイン</div>
+  </div>
+</div>
+
+<script>
+
+const INSTANCE_URL = 'https://id.noctella.fun'; // 置換
+const CLIENT_ID = '';                  // 置換（不要な場合は空文字に）
+const REDIRECT_URI = 'https://yourdomain.example/miauth_redirect.html'; // 置換
+
+const modal = document.getElementById('miauthModal');
+const openBtn = document.getElementById('openModalBtn');
+const cancelBtn = document.getElementById('cancelBtn');
+const loginBtn = document.getElementById('loginBtn');
+const status = document.getElementById('status');
+
+let popup = null;
+let authState = null;
+
+openBtn.addEventListener('click', () => {
+  showModal();
+});
+
+cancelBtn.addEventListener('click', () => {
+  hideModal();
+});
+
+loginBtn.addEventListener('click', () => {
+  startMiauthFlow();
+});
+
+function showModal() {
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden', 'false');
+}
+function hideModal() {
+  modal.classList.remove('show');
+  modal.setAttribute('aria-hidden', 'true');
+}
+
+/* ランダム state を作って CSRF 保護（受け渡しの一致を確認） */
+function makeState() {
+  const s = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(s).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+/* Miauth 認可フロー開始 */
+function startMiauthFlow() {
+  authState = makeState();
+  // Miauth のエンドポイントはインスタンスごとに /miauth/authorize のことが多いです
+  // 認可方式（response_type）や scope は Misskey インスタンスの実装に合わせて下さい。
+  const params = new URLSearchParams({
+    // 必要に応じて client_id, scope, response_type などを追加
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    response_type: 'token', // 例: token（インプリシット）/ code (認可コード) — Misskey 実装に合わせる
+    state: authState,
+    // scope: 'read:account' // 必要に応じて
+  });
+
+  const authUrl = `${INSTANCE_URL.replace(/\/$/, '')}/miauth/authorize?${params.toString()}`;
+
+  // ポップアップを中央に開く
+  const w = 520, h = 720;
+  const left = (screen.width / 2) - (w / 2);
+  const top = (screen.height / 2) - (h / 2);
+  popup = window.open(authUrl, 'miauth_popup', `width=${w},height=${h},left=${left},top=${top}`);
+
+  if (!popup) {
+    status.textContent = 'ポップアップブロックされています。ポップアップを許可してください。';
+    return;
+  }
+
+  status.textContent = '認証中... ポップアップで許可してください。';
+  // フォーカス
+  popup.focus();
+}
+
+/* ポップアップから送られてくるメッセージを受け取る */
+window.addEventListener('message', (ev) => {
+  // origin を厳密に検証してください（セキュリティ）
+  // ここでは簡易のため受け取るが、本番では ev.origin を REDIRECT_URI のドメインと比較すること。
+  try {
+    const data = ev.data;
+    if (!data || data.type !== 'miauth_result') return;
+
+    // state の一致を確認
+    if (data.state !== authState) {
+      status.textContent = '認証失敗（state不一致）。';
+      console.warn('state mismatch', data.state, authState);
+      return;
+    }
+
+    // 成功時: data.token などを受け取る想定
+    if (data.error) {
+      status.textContent = '認証エラー: ' + data.error;
+      console.error('miauth error', data);
+    } else {
+      // 例: data.access_token
+      const token = data.access_token || data.token || null;
+      if (token) {
+        // 例として localStorage に保存
+        localStorage.setItem('miauth_access_token', token);
+        status.textContent = 'ログイン成功（トークン保存）。モーダルを閉じます。';
+        // 必要ならここで API へユーザー情報取得など行う
+      } else {
+        status.textContent = '認証成功（ただしトークン無し）。';
+      }
+    }
+
+    // ポップアップがまだ開いていれば閉じる
+    if (popup && !popup.closed) popup.close();
+    hideModal();
+  } catch (e) {
+    console.error(e);
+  }
+});
+</script>
+</body>
+</html>
